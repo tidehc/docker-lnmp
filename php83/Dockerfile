@@ -1,117 +1,54 @@
-FROM php:8.3.16-fpm
+FROM php:8.3.36-fpm-alpine
 
 LABEL maintainer="ogenes.yi@gmail.com"
 
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-    apt-utils \
-    curl \
-    sudo \
-    iputils-ping \
-    libicu-dev \
-    libmemcached-dev \
-    libz-dev \
-    libpq-dev \
-    libzip-dev \
-    libonig-dev \
-    libjpeg62-turbo-dev \
-    libjpeg-dev \
-    libpng-dev \
-    libfreetype6-dev \
-    libssl-dev \
-    libmcrypt-dev \
-    zlib1g-dev \
-    libxml2-dev \
-    libbz2-dev \
-    librdkafka-dev \
-    graphviz \
-    git \
-    vim \
-    wget \
-    net-tools \
-    zip \
-    unzip \
-    openssh-server \
-    openssh-client \
-    subversion \
-  && rm -rf /var/lib/apt/lists/*
+# 换阿里云源
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
+# 系统依赖（linux-headers 是关键）
+RUN apk add --no-cache \
+    curl git unzip zip sudo \
+    linux-headers \
+    icu-dev libzip-dev oniguruma-dev \
+    libjpeg-turbo-dev libpng-dev freetype-dev \
+    openssl-dev libxml2-dev bzip2-dev \
+    librdkafka-dev libmemcached-dev
 
-RUN docker-php-ext-configure bcmath --enable-bcmath \
-    && docker-php-ext-configure pcntl --enable-pcntl \
-    && docker-php-ext-configure pdo_mysql --with-pdo-mysql \
-    && docker-php-ext-configure mbstring --enable-mbstring \
-    && docker-php-ext-configure soap --enable-soap \
-    && docker-php-ext-configure exif --enable-exif \
-    && docker-php-ext-install \
-        bcmath \
-        intl \
-        mbstring \
-        mysqli \
-        pcntl \
-        pdo_mysql \
-        sockets \
-        zip \
-        soap \
-        exif \
-  && docker-php-ext-install opcache \
-  && docker-php-ext-enable opcache
+# PHP 核心扩展
+RUN docker-php-ext-configure gd --with-jpeg --with-freetype \
+ && docker-php-ext-install -j$(nproc) \
+    bcmath intl mbstring mysqli pcntl pdo_mysql \
+    sockets zip soap exif gd opcache
 
+# PECL 扩展
+ARG EXT_REDIS=false
+RUN if [ "$EXT_REDIS" = "true" ]; then \
+    apk add --no-cache $PHPIZE_DEPS \
+    && pecl install -o -f redis \
+    && docker-php-ext-enable redis \
+    && apk del $PHPIZE_DEPS; \
+    fi
 
-ARG EXT_GD
-RUN if $EXT_GD; then \
-    docker-php-ext-configure gd --with-jpeg=/usr/lib --with-freetype=/usr/include/freetype2 \
-            && docker-php-ext-install gd; \
-fi
+ARG EXT_SWOOLE=false
+RUN if [ "$EXT_SWOOLE" = "true" ]; then \
+    apk add --no-cache $PHPIZE_DEPS \
+    && pecl install -o -f swoole \
+    && docker-php-ext-enable swoole \
+    && apk del $PHPIZE_DEPS; \
+    fi
 
-ARG EXT_REDIS
-RUN if $EXT_REDIS; then \
-    pecl install -o -f redis && docker-php-ext-enable redis; \
-fi
-
-ARG EXT_GRPC
-RUN if $EXT_GRPC; then \
-    pecl install -o -f grpc && docker-php-ext-enable grpc; \
-fi
-
-ARG EXT_PROTOBUF
-RUN if $EXT_PROTOBUF; then \
-    pecl install -o -f protobuf  && docker-php-ext-enable protobuf; \
-fi
-
-ARG EXT_MEMCACHED
-RUN if $EXT_MEMCACHED; then \
-    pecl install -o -f memcached  && docker-php-ext-enable memcached; \
-fi
-
-ARG EXT_SWOOLED
-RUN if $EXT_SWOOLED; then \
-    pecl install -o -f swoole && docker-php-ext-enable swoole; \
-fi
-
-ARG EXT_KAFKA
-RUN if EXT_KAFKA; then \
-    pecl install -o -f rdkafka && docker-php-ext-enable rdkafka; \
-fi
-
-RUN rm -rf /tmp/pear
+# Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 ENV COMPOSER_HOME /var/www/.composer
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-RUN composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/
-
+RUN mkdir -p $COMPOSER_HOME/cache && chown -R www-data:www-data $COMPOSER_HOME
 
 RUN chown -R www-data:www-data /var/www/
-
 RUN mkdir -p /var/log/php && chown -R www-data:www-data /var/log/php
 RUN mkdir -p /data/log && chown -R www-data:www-data /data/log
-
-RUN mkdir -p $COMPOSER_HOME/cache
-
-RUN ln -snf /usr/local/bin/php /usr/local/bin/php83
 
 VOLUME $COMPOSER_HOME
 WORKDIR /var/www
